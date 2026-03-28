@@ -1,0 +1,9 @@
+{
+  "domain": "homekit_ac_fix",
+  "name": "HomeKit AC Fix",
+  "documentation": "https://github.com/aspect-building/homekit-ac-fix",
+  "version": "1.0.0",
+  "after_dependencies": ["homekit"],
+  "codeowners": [],
+  "integration_type": "service"
+}
