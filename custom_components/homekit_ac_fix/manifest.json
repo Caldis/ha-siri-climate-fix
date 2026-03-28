@@ -1,9 +1,11 @@
 {
   "domain": "homekit_ac_fix",
   "name": "HomeKit AC Fix",
-  "documentation": "https://github.com/aspect-building/homekit-ac-fix",
+  "documentation": "https://github.com/Caldis/homekit-ac-fix",
   "version": "1.0.0",
+  "requirements": [],
   "after_dependencies": ["homekit"],
-  "codeowners": [],
+  "codeowners": ["@Caldis"],
+  "iot_class": "calculated",
   "integration_type": "service"
 }

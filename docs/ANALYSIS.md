@@ -127,7 +127,7 @@ heat. This lets the AC firmware use its hardware-remembered mode.
 
 ## Previous automation-based solution (still deployed as fallback)
 
-The automation approach (`D:\Code\agentic\ha_deploy.py`) uses:
+The automation approach (separate repo, deployed via HA REST/WS API) uses:
 - 3x `input_text` helpers to store last HVAC mode per AC
 - Automation "Save" to record mode changes
 - Automation "Restore" to revert heat fallback

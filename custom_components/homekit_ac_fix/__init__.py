@@ -31,22 +31,30 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         from homeassistant.components.homekit.const import (
             CHAR_TARGET_HEATING_COOLING,
         )
+        from homeassistant.components.climate import ClimateEntityFeature
     except ImportError:
-        _LOGGER.error(
-            "HomeKit AC Fix: cannot import homekit components — "
-            "is the homekit integration installed?"
+        _LOGGER.warning(
+            "Cannot import homekit components — homekit integration not "
+            "installed or HA version incompatible. Patch not applied."
         )
-        return False
+        return True  # non-essential; don't mark integration as failed
 
     if not hasattr(Thermostat, "_set_chars"):
-        _LOGGER.error(
-            "HomeKit AC Fix: Thermostat._set_chars not found — "
-            "HA version may be incompatible, patch not applied"
+        _LOGGER.warning(
+            "Thermostat._set_chars not found — HA version may be "
+            "incompatible. Patch not applied."
         )
-        return False
+        return True
+
+    # Guard against double-patching on integration reload.
+    if getattr(Thermostat._set_chars, "_homekit_ac_fix_patched", False):
+        _LOGGER.debug("Already patched, skipping")
+        return True
 
     original_set_chars = Thermostat._set_chars
 
+    # Both async_setup and _set_chars run in the HA event loop (main thread),
+    # so the attribute assignment below is safe — no concurrent access.
     def patched_set_chars(self: Any, char_values: dict[str, Any]) -> None:
         """Intercept AUTO(3) when unsupported: call climate.turn_on."""
         target_hc = char_values.get(CHAR_TARGET_HEATING_COOLING)
@@ -56,47 +64,68 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             and target_hc == HC_HEAT_COOL_AUTO
             and HC_HEAT_COOL_AUTO not in self.hc_homekit_to_hass
         ):
-            # Siri sent AUTO, device doesn't support it.
-            # Original would fall back to heat. We call turn_on instead.
             state = self.hass.states.get(self.entity_id)
 
-            if state and state.state in ("off", "unavailable", "unknown"):
-                _LOGGER.info(
-                    "HomeKit AC Fix: AUTO requested for %s (off), "
-                    "using turn_on instead of heat fallback",
+            # If entity state is unavailable, fall back to original behavior.
+            if state is None:
+                _LOGGER.warning(
+                    "Cannot get state for %s, falling back to original",
                     self.entity_id,
                 )
-                self.async_call_service(
-                    "climate",
-                    "turn_on",
-                    {"entity_id": self.entity_id},
-                    f"{CHAR_TARGET_HEATING_COOLING} to {target_hc} (turn_on)",
-                )
+                original_set_chars(self, char_values)
+                return
+
+            if state.state == "off":
+                features = state.attributes.get("supported_features", 0)
+                if features & ClimateEntityFeature.TURN_ON:
+                    _LOGGER.info(
+                        "AUTO requested for %s (off) — using turn_on",
+                        self.entity_id,
+                    )
+                    self.async_call_service(
+                        "climate",
+                        "turn_on",
+                        {"entity_id": self.entity_id},
+                        f"{CHAR_TARGET_HEATING_COOLING} to"
+                        f" {target_hc} (turn_on)",
+                    )
+                else:
+                    # Device doesn't advertise TURN_ON; let bridge do its
+                    # original fallback — at least the AC will turn on.
+                    _LOGGER.warning(
+                        "%s does not support turn_on, "
+                        "falling back to original",
+                        self.entity_id,
+                    )
+                    original_set_chars(self, char_values)
+                    return
             else:
+                # Device already on — no mode change needed.
                 _LOGGER.debug(
-                    "HomeKit AC Fix: AUTO requested for %s (already %s), "
-                    "no mode change needed",
+                    "AUTO requested for %s (already %s), skipping",
                     self.entity_id,
-                    state.state if state else "unknown",
+                    state.state,
                 )
 
-            # Strip the mode key; let original handle remaining chars
-            # (temperature, humidity, etc.) without triggering fallback.
+            # Strip the mode key; forward remaining chars (temperature, etc.)
             remaining = {
                 k: v
                 for k, v in char_values.items()
                 if k != CHAR_TARGET_HEATING_COOLING
             }
             if remaining:
+                _LOGGER.debug(
+                    "Forwarding remaining chars for %s: %s",
+                    self.entity_id,
+                    list(remaining.keys()),
+                )
                 original_set_chars(self, remaining)
             return
 
         # Not an AUTO fallback — pass through unchanged.
         original_set_chars(self, char_values)
 
-    Thermostat._set_chars = patched_set_chars
-    _LOGGER.info(
-        "HomeKit AC Fix: Thermostat._set_chars patched — "
-        "AUTO fallback will use climate.turn_on"
-    )
+    patched_set_chars._homekit_ac_fix_patched = True  # type: ignore[attr-defined]
+    Thermostat._set_chars = patched_set_chars  # type: ignore[assignment]
+    _LOGGER.info("Thermostat._set_chars patched — AUTO fallback will use turn_on")
     return True
